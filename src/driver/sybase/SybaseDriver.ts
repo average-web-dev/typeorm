@@ -112,6 +112,8 @@ export class SybaseDriver implements Driver {
         enabled: false,
     }
 
+    maxAliasLength = 28
+
     /**
      * Supported column data types by Sybase ASE.
      */
@@ -703,21 +705,18 @@ export class SybaseDriver implements Driver {
     ): ObjectLiteral | undefined {
         if (!insertResult) return undefined
 
-        return Object.keys(insertResult).reduce(
-            (map, key) => {
-                const column = metadata.findColumnWithDatabaseName(key)
-                if (column) {
-                    OrmUtils.mergeDeep(
-                        map,
-                        column.createValueMap(
-                            this.prepareHydratedValue(insertResult[key], column),
-                        ),
-                    )
-                }
-                return map
-            },
-            {} as ObjectLiteral,
-        )
+        return Object.keys(insertResult).reduce((map, key) => {
+            const column = metadata.findColumnWithDatabaseName(key)
+            if (column) {
+                OrmUtils.mergeDeep(
+                    map,
+                    column.createValueMap(
+                        this.prepareHydratedValue(insertResult[key], column),
+                    ),
+                )
+            }
+            return map
+        }, {} as ObjectLiteral)
     }
 
     /**
@@ -740,8 +739,7 @@ export class SybaseDriver implements Driver {
                 tableColumn.name !== columnMetadata.databaseName ||
                 tableColumn.type !==
                     this.normalizeType(columnMetadata).toLowerCase() ||
-                tableColumn.length !==
-                    columnMetadata.length?.toString() ||
+                tableColumn.length !== columnMetadata.length?.toString() ||
                 tableColumn.precision !== columnMetadata.precision ||
                 tableColumn.scale !== columnMetadata.scale ||
                 tableColumn.isGenerated !== columnMetadata.isGenerated ||
@@ -774,9 +772,7 @@ export class SybaseDriver implements Driver {
         column: TableColumn,
         length: string,
     ): boolean {
-        if (
-            this.dataTypeDefaults?.[column.type]?.length
-        ) {
+        if (this.dataTypeDefaults?.[column.type]?.length) {
             return (
                 this.dataTypeDefaults[column.type]!.length!.toString() ===
                 length
@@ -797,12 +793,8 @@ export class SybaseDriver implements Driver {
         column: TableColumn,
         precision: number,
     ): boolean {
-        if (
-            this.dataTypeDefaults?.[column.type]?.precision
-        ) {
-            return (
-                this.dataTypeDefaults[column.type]!.precision! === precision
-            )
+        if (this.dataTypeDefaults?.[column.type]?.precision) {
+            return this.dataTypeDefaults[column.type]!.precision! === precision
         }
         return false
     }
@@ -819,9 +811,7 @@ export class SybaseDriver implements Driver {
         column: TableColumn,
         scale: number,
     ): boolean {
-        if (
-            this.dataTypeDefaults?.[column.type]?.scale
-        ) {
+        if (this.dataTypeDefaults?.[column.type]?.scale) {
             return this.dataTypeDefaults[column.type]!.scale! === scale
         }
         return false
