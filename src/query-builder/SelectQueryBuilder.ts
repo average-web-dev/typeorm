@@ -44,6 +44,7 @@ import { InstanceChecker } from "../util/InstanceChecker"
 import { ApplyValueTransformers } from "../util/ApplyValueTransformers"
 import type { SqlServerDriver } from "../driver/sqlserver/SqlServerDriver"
 import type { ReactNativeDriver } from "../driver/react-native/ReactNativeDriver"
+import { OffsetNotSupportedError } from "../error/OffsetNotSupportedError"
 
 /**
  * Allows to build complex sql queries in a fashion way and execute those queries.
@@ -2311,6 +2312,15 @@ export class SelectQueryBuilder<Entity extends ObjectLiteral>
             })
 
         const select = this.createSelectDistinctExpression()
+
+        let top = ""
+        if (this.connection.driver.options.type === "sybase") {
+            const limit = this.expressionMap.limit || this.expressionMap.take
+            if (limit) {
+                top = `TOP ${limit} `
+            }
+        }
+
         const selection = allSelects
             .map(
                 (select) =>
@@ -2323,6 +2333,7 @@ export class SelectQueryBuilder<Entity extends ObjectLiteral>
 
         return (
             select +
+            top +
             selection +
             " FROM " +
             froms.join(", ") +
@@ -2733,6 +2744,9 @@ export class SelectQueryBuilder<Entity extends ObjectLiteral>
                 )
             if (hasLimit) return " FETCH NEXT " + limit + " ROWS ONLY"
             if (hasOffset) return " OFFSET " + offset + " ROWS"
+        } else if (this.connection.driver.options.type === "sybase") {
+            if (hasOffset) throw new OffsetNotSupportedError()
+            return ""
         } else {
             if (hasLimit && hasOffset)
                 return " LIMIT " + limit + " OFFSET " + offset
