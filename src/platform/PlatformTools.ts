@@ -137,6 +137,12 @@ export class PlatformTools {
                  */
                 case "react-native-sqlite-storage":
                     return require("react-native-sqlite-storage")
+
+                /**
+                 * sybase
+                 */
+                case "sybase-tds":
+                    return require("sybase-tds")
             }
         } catch (err) {
             return require(

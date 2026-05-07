@@ -132,6 +132,8 @@ export type * from "./driver/types/DatabaseType"
 export type * from "./driver/types/GeoJsonTypes"
 export type * from "./driver/types/ReplicationMode"
 export * from "./driver/sqlserver/MssqlParameter"
+export type * from "./driver/sybase/SybaseDataSourceOptions"
+export type * from "./driver/sybase/SybaseConnectionCredentialsOptions"
 export type * from "./subscriber/event/QueryEvent"
 
 export { ConnectionOptionsReader } from "./connection/ConnectionOptionsReader"

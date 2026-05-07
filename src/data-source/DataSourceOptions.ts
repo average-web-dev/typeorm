@@ -15,6 +15,7 @@ import type { SapDataSourceOptions } from "../driver/sap/SapDataSourceOptions"
 import type { SpannerDataSourceOptions } from "../driver/spanner/SpannerDataSourceOptions"
 import type { SqljsDataSourceOptions } from "../driver/sqljs/SqljsDataSourceOptions"
 import type { SqlServerDataSourceOptions } from "../driver/sqlserver/SqlServerDataSourceOptions"
+import type { SybaseDataSourceOptions } from "../driver/sybase/SybaseDataSourceOptions"
 
 /**
  * DataSourceOptions is an interface with settings and options for specific DataSource.
@@ -37,3 +38,4 @@ export type DataSourceOptions =
     | SpannerDataSourceOptions
     | SqljsDataSourceOptions
     | SqlServerDataSourceOptions
+    | SybaseDataSourceOptions
