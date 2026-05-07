@@ -139,6 +139,8 @@ export * from "./driver/types/GeoJsonTypes"
 export * from "./driver/types/ReplicationMode"
 export * from "./driver/sqlserver/MssqlParameter"
 export * from "./subscriber/event/QueryEvent"
+export * from "./driver/sybase/SybaseConnectionOptions"
+export * from "./driver/sybase/SybaseConnectionCredentialsOptions"
 
 // export * from "./data-source";
 
