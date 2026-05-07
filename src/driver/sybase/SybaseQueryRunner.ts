@@ -1,9 +1,7 @@
-import type { ObjectLiteral } from "../../common/ObjectLiteral"
 import { QueryFailedError } from "../../error/QueryFailedError"
 import { QueryRunnerAlreadyReleasedError } from "../../error/QueryRunnerAlreadyReleasedError"
 import { TransactionAlreadyStartedError } from "../../error/TransactionAlreadyStartedError"
 import { TransactionNotStartedError } from "../../error/TransactionNotStartedError"
-import { NamedPlaceholdersNotSupportedError } from "../../error/NamedPlaceholdersNotSupportedError"
 import { TypeORMError } from "../../error/TypeORMError"
 import { BaseQueryRunner } from "../../query-runner/BaseQueryRunner"
 import { QueryLock } from "../../query-runner/QueryLock"
@@ -24,7 +22,6 @@ import { OrmUtils } from "../../util/OrmUtils"
 import { Query } from "../Query"
 import type { ColumnType } from "../types/ColumnTypes"
 import type { IsolationLevel } from "../types/IsolationLevel"
-import { validateIsolationLevel } from "../validate-isolation-level"
 import { MetadataTableType } from "../types/MetadataTableType"
 import type { ReplicationMode } from "../types/ReplicationMode"
 import type { SybaseDriver } from "./SybaseDriver"
@@ -55,7 +52,7 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
     constructor(driver: SybaseDriver, mode: ReplicationMode) {
         super()
         this.driver = driver
-        this.dataSource = driver.dataSource
+        this.connection = driver.dataSource
         this.broadcaster = new Broadcaster(this)
         this.mode = mode
     }
@@ -96,13 +93,6 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
      * @param isolationLevel
      */
     async startTransaction(isolationLevel?: IsolationLevel): Promise<void> {
-        isolationLevel ??= this.dataSource.options.isolationLevel
-
-        validateIsolationLevel(
-            this.driver.supportedIsolationLevels,
-            isolationLevel,
-        )
-
         if (this.isReleased) throw new QueryRunnerAlreadyReleasedError()
 
         if (
@@ -175,12 +165,10 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
      */
     async query(
         query: string,
-        parameters?: any[] | ObjectLiteral,
+        parameters?: any[],
         useStructuredResult = false,
     ): Promise<any> {
         if (this.isReleased) throw new QueryRunnerAlreadyReleasedError()
-        if (parameters && !Array.isArray(parameters))
-            throw new NamedPlaceholdersNotSupportedError()
 
         const release = await this.lock.acquire()
 
@@ -254,9 +242,7 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
             if (
                 query.trimStart().slice(0, 11).toUpperCase() === "INSERT INTO"
             ) {
-                const idResult = await conn.query(
-                    "SELECT @@IDENTITY AS id",
-                )
+                const idResult = await conn.query("SELECT @@IDENTITY AS id")
                 const id = idResult.rows[0]?.[0]
                 if (id !== null && id !== undefined) {
                     result.raw = id
@@ -383,8 +369,10 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
         ifNotExists?: boolean,
     ): Promise<void> {
         const up = ifNotExists
-            ? `IF NOT EXISTS (SELECT 1 FROM master..sysdatabases WHERE name = '${database.replaceAll("'", "''")}') ` +
-              `CREATE DATABASE ${this.driver.escape(database)}`
+            ? `IF NOT EXISTS (SELECT 1 FROM master..sysdatabases WHERE name = '${database.replaceAll(
+                  "'",
+                  "''",
+              )}') ` + `CREATE DATABASE ${this.driver.escape(database)}`
             : `CREATE DATABASE ${this.driver.escape(database)}`
         const down = `DROP DATABASE ${this.driver.escape(database)}`
         await this.executeQueries(new Query(up), new Query(down))
@@ -392,8 +380,10 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
 
     async dropDatabase(database: string, ifExists?: boolean): Promise<void> {
         const up = ifExists
-            ? `IF EXISTS (SELECT 1 FROM master..sysdatabases WHERE name = '${database.replaceAll("'", "''")}') ` +
-              `DROP DATABASE ${this.driver.escape(database)}`
+            ? `IF EXISTS (SELECT 1 FROM master..sysdatabases WHERE name = '${database.replaceAll(
+                  "'",
+                  "''",
+              )}') ` + `DROP DATABASE ${this.driver.escape(database)}`
             : `DROP DATABASE ${this.driver.escape(database)}`
         const down = `CREATE DATABASE ${this.driver.escape(database)}`
         await this.executeQueries(new Query(up), new Query(down))
@@ -436,7 +426,7 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
 
         if (createIndices) {
             table.indices.forEach((index) => {
-                index.name ??= this.dataSource.namingStrategy.indexName(
+                index.name ??= this.connection.namingStrategy.indexName(
                     table,
                     index.columnNames,
                     index.where,
@@ -498,12 +488,16 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
 
         const upQueries: Query[] = [
             new Query(
-                `EXEC sp_rename '${this.getTablePath(oldTable)}', '${newTableName}'`,
+                `EXEC sp_rename '${this.getTablePath(
+                    oldTable,
+                )}', '${newTableName}'`,
             ),
         ]
         const downQueries: Query[] = [
             new Query(
-                `EXEC sp_rename '${this.getTablePath(newTable)}', '${oldTable.name}'`,
+                `EXEC sp_rename '${this.getTablePath(newTable)}', '${
+                    oldTable.name
+                }'`,
             ),
         ]
 
@@ -543,7 +537,9 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
 
         upQueries.push(
             new Query(
-                `ALTER TABLE ${this.escapePath(table)} ADD ${this.buildCreateColumnSql(table, column)}`,
+                `ALTER TABLE ${this.escapePath(
+                    table,
+                )} ADD ${this.buildCreateColumnSql(table, column)}`,
             ),
         )
         downQueries.push(
@@ -557,45 +553,55 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
             if (primaryColumns.length > 0) {
                 const pkName =
                     primaryColumns[0].primaryKeyConstraintName ??
-                    this.dataSource.namingStrategy.primaryKeyName(
+                    this.connection.namingStrategy.primaryKeyName(
                         clonedTable,
                         primaryColumns.map((c) => c.name),
                     )
                 upQueries.push(
                     new Query(
-                        `ALTER TABLE ${this.escapePath(table)} DROP CONSTRAINT [${pkName}]`,
+                        `ALTER TABLE ${this.escapePath(
+                            table,
+                        )} DROP CONSTRAINT [${pkName}]`,
                     ),
                 )
                 downQueries.push(
                     new Query(
-                        `ALTER TABLE ${this.escapePath(table)} ADD CONSTRAINT [${pkName}] PRIMARY KEY (${primaryColumns.map((c) => `[${c.name}]`).join(", ")})`,
+                        `ALTER TABLE ${this.escapePath(
+                            table,
+                        )} ADD CONSTRAINT [${pkName}] PRIMARY KEY (${primaryColumns
+                            .map((c) => `[${c.name}]`)
+                            .join(", ")})`,
                     ),
                 )
             }
-            clonedTable.columns
-                .filter((c) => c.isPrimary)
-                .push(column)
+            clonedTable.columns.filter((c) => c.isPrimary).push(column)
             const newPkName =
                 column.primaryKeyConstraintName ??
-                this.dataSource.namingStrategy.primaryKeyName(
+                this.connection.namingStrategy.primaryKeyName(
                     clonedTable,
                     clonedTable.primaryColumns.map((c) => c.name),
                 )
             upQueries.push(
                 new Query(
-                    `ALTER TABLE ${this.escapePath(table)} ADD CONSTRAINT [${newPkName}] PRIMARY KEY (${clonedTable.primaryColumns.map((c) => `[${c.name}]`).join(", ")})`,
+                    `ALTER TABLE ${this.escapePath(
+                        table,
+                    )} ADD CONSTRAINT [${newPkName}] PRIMARY KEY (${clonedTable.primaryColumns
+                        .map((c) => `[${c.name}]`)
+                        .join(", ")})`,
                 ),
             )
             downQueries.push(
                 new Query(
-                    `ALTER TABLE ${this.escapePath(table)} DROP CONSTRAINT [${newPkName}]`,
+                    `ALTER TABLE ${this.escapePath(
+                        table,
+                    )} DROP CONSTRAINT [${newPkName}]`,
                 ),
             )
         }
 
         if (column.isUnique) {
             const uniqueConstraint = new TableUnique({
-                name: this.dataSource.namingStrategy.uniqueConstraintName(
+                name: this.connection.namingStrategy.uniqueConstraintName(
                     table,
                     [column.name],
                 ),
@@ -604,12 +610,16 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
             clonedTable.uniques.push(uniqueConstraint)
             upQueries.push(
                 new Query(
-                    `ALTER TABLE ${this.escapePath(table)} ADD CONSTRAINT [${uniqueConstraint.name}] UNIQUE ([${column.name}])`,
+                    `ALTER TABLE ${this.escapePath(table)} ADD CONSTRAINT [${
+                        uniqueConstraint.name
+                    }] UNIQUE ([${column.name}])`,
                 ),
             )
             downQueries.push(
                 new Query(
-                    `ALTER TABLE ${this.escapePath(table)} DROP CONSTRAINT [${uniqueConstraint.name}]`,
+                    `ALTER TABLE ${this.escapePath(table)} DROP CONSTRAINT [${
+                        uniqueConstraint.name
+                    }]`,
                 ),
             )
         }
@@ -688,12 +698,16 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
             if (newColumn.name !== oldColumn.name) {
                 upQueries.push(
                     new Query(
-                        `EXEC sp_rename '${this.getTablePath(table)}.${oldColumn.name}', '${newColumn.name}', 'COLUMN'`,
+                        `EXEC sp_rename '${this.getTablePath(table)}.${
+                            oldColumn.name
+                        }', '${newColumn.name}', 'COLUMN'`,
                     ),
                 )
                 downQueries.push(
                     new Query(
-                        `EXEC sp_rename '${this.getTablePath(table)}.${newColumn.name}', '${oldColumn.name}', 'COLUMN'`,
+                        `EXEC sp_rename '${this.getTablePath(table)}.${
+                            newColumn.name
+                        }', '${oldColumn.name}', 'COLUMN'`,
                     ),
                 )
 
@@ -716,12 +730,16 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
             if (newColumn.isNullable !== oldColumn.isNullable) {
                 upQueries.push(
                     new Query(
-                        `ALTER TABLE ${this.escapePath(table)} MODIFY [${newColumn.name}] ${newColumn.isNullable ? "NULL" : "NOT NULL"}`,
+                        `ALTER TABLE ${this.escapePath(table)} MODIFY [${
+                            newColumn.name
+                        }] ${newColumn.isNullable ? "NULL" : "NOT NULL"}`,
                     ),
                 )
                 downQueries.push(
                     new Query(
-                        `ALTER TABLE ${this.escapePath(table)} MODIFY [${oldColumn.name}] ${oldColumn.isNullable ? "NULL" : "NOT NULL"}`,
+                        `ALTER TABLE ${this.escapePath(table)} MODIFY [${
+                            oldColumn.name
+                        }] ${oldColumn.isNullable ? "NULL" : "NOT NULL"}`,
                     ),
                 )
             }
@@ -729,7 +747,7 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
             if (newColumn.isUnique !== oldColumn.isUnique) {
                 if (newColumn.isUnique) {
                     const uniqueConstraint = new TableUnique({
-                        name: this.dataSource.namingStrategy.uniqueConstraintName(
+                        name: this.connection.namingStrategy.uniqueConstraintName(
                             table,
                             [newColumn.name],
                         ),
@@ -738,12 +756,18 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
                     clonedTable.uniques.push(uniqueConstraint)
                     upQueries.push(
                         new Query(
-                            `ALTER TABLE ${this.escapePath(table)} ADD CONSTRAINT [${uniqueConstraint.name}] UNIQUE ([${newColumn.name}])`,
+                            `ALTER TABLE ${this.escapePath(
+                                table,
+                            )} ADD CONSTRAINT [${
+                                uniqueConstraint.name
+                            }] UNIQUE ([${newColumn.name}])`,
                         ),
                     )
                     downQueries.push(
                         new Query(
-                            `ALTER TABLE ${this.escapePath(table)} DROP CONSTRAINT [${uniqueConstraint.name}]`,
+                            `ALTER TABLE ${this.escapePath(
+                                table,
+                            )} DROP CONSTRAINT [${uniqueConstraint.name}]`,
                         ),
                     )
                 } else {
@@ -759,12 +783,18 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
                         )
                         upQueries.push(
                             new Query(
-                                `ALTER TABLE ${this.escapePath(table)} DROP CONSTRAINT [${uniqueConstraint.name}]`,
+                                `ALTER TABLE ${this.escapePath(
+                                    table,
+                                )} DROP CONSTRAINT [${uniqueConstraint.name}]`,
                             ),
                         )
                         downQueries.push(
                             new Query(
-                                `ALTER TABLE ${this.escapePath(table)} ADD CONSTRAINT [${uniqueConstraint.name}] UNIQUE ([${oldColumn.name}])`,
+                                `ALTER TABLE ${this.escapePath(
+                                    table,
+                                )} ADD CONSTRAINT [${
+                                    uniqueConstraint.name
+                                }] UNIQUE ([${oldColumn.name}])`,
                             ),
                         )
                     }
@@ -820,12 +850,16 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
         clonedTable.findColumnUniques(column).forEach((u) => {
             upQueries.push(
                 new Query(
-                    `ALTER TABLE ${this.escapePath(table)} DROP CONSTRAINT [${u.name}]`,
+                    `ALTER TABLE ${this.escapePath(table)} DROP CONSTRAINT [${
+                        u.name
+                    }]`,
                 ),
             )
             downQueries.push(
                 new Query(
-                    `ALTER TABLE ${this.escapePath(table)} ADD CONSTRAINT [${u.name}] UNIQUE ([${column.name}])`,
+                    `ALTER TABLE ${this.escapePath(table)} ADD CONSTRAINT [${
+                        u.name
+                    }] UNIQUE ([${column.name}])`,
                 ),
             )
             clonedTable.removeUniqueConstraint(u)
@@ -843,7 +877,9 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
         )
         downQueries.push(
             new Query(
-                `ALTER TABLE ${this.escapePath(table)} ADD ${this.buildCreateColumnSql(table, column)}`,
+                `ALTER TABLE ${this.escapePath(
+                    table,
+                )} ADD ${this.buildCreateColumnSql(table, column)}`,
             ),
         )
 
@@ -877,13 +913,13 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
 
         const pkName =
             constraintName ??
-            this.dataSource.namingStrategy.primaryKeyName(table, columnNames)
-        const columnNamesSql = columnNames
-            .map((c) => `[${c}]`)
-            .join(", ")
+            this.connection.namingStrategy.primaryKeyName(table, columnNames)
+        const columnNamesSql = columnNames.map((c) => `[${c}]`).join(", ")
 
         const up = new Query(
-            `ALTER TABLE ${this.escapePath(table)} ADD CONSTRAINT [${pkName}] PRIMARY KEY (${columnNamesSql})`,
+            `ALTER TABLE ${this.escapePath(
+                table,
+            )} ADD CONSTRAINT [${pkName}] PRIMARY KEY (${columnNamesSql})`,
         )
         const down = new Query(
             `ALTER TABLE ${this.escapePath(table)} DROP CONSTRAINT [${pkName}]`,
@@ -911,25 +947,29 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
         if (primaryColumns.length > 0) {
             const pkName =
                 primaryColumns[0].primaryKeyConstraintName ??
-                this.dataSource.namingStrategy.primaryKeyName(
+                this.connection.namingStrategy.primaryKeyName(
                     table,
                     primaryColumns.map((c) => c.name),
                 )
             await this.query(
-                `ALTER TABLE ${this.escapePath(table)} DROP CONSTRAINT [${pkName}]`,
+                `ALTER TABLE ${this.escapePath(
+                    table,
+                )} DROP CONSTRAINT [${pkName}]`,
             )
         }
 
         if (columns.length > 0) {
             const pkName =
                 columns[0].primaryKeyConstraintName ??
-                this.dataSource.namingStrategy.primaryKeyName(
+                this.connection.namingStrategy.primaryKeyName(
                     table,
                     columns.map((c) => c.name),
                 )
             const columnNames = columns.map((c) => `[${c.name}]`).join(", ")
             await this.query(
-                `ALTER TABLE ${this.escapePath(table)} ADD CONSTRAINT [${pkName}] PRIMARY KEY (${columnNames})`,
+                `ALTER TABLE ${this.escapePath(
+                    table,
+                )} ADD CONSTRAINT [${pkName}] PRIMARY KEY (${columnNames})`,
             )
         }
     }
@@ -945,7 +985,7 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
         const pkName =
             constraintName ??
             (table.primaryColumns[0]?.primaryKeyConstraintName ||
-                this.dataSource.namingStrategy.primaryKeyName(
+                this.connection.namingStrategy.primaryKeyName(
                     table,
                     table.primaryColumns.map((c) => c.name),
                 ))
@@ -954,7 +994,11 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
             `ALTER TABLE ${this.escapePath(table)} DROP CONSTRAINT [${pkName}]`,
         )
         const down = new Query(
-            `ALTER TABLE ${this.escapePath(table)} ADD CONSTRAINT [${pkName}] PRIMARY KEY (${table.primaryColumns.map((c) => `[${c.name}]`).join(", ")})`,
+            `ALTER TABLE ${this.escapePath(
+                table,
+            )} ADD CONSTRAINT [${pkName}] PRIMARY KEY (${table.primaryColumns
+                .map((c) => `[${c.name}]`)
+                .join(", ")})`,
         )
         await this.executeQueries(up, down)
 
@@ -972,7 +1016,7 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
             : await this.getCachedTable(tableOrName)
 
         uniqueConstraint.name ??=
-            this.dataSource.namingStrategy.uniqueConstraintName(
+            this.connection.namingStrategy.uniqueConstraintName(
                 table,
                 uniqueConstraint.columnNames,
             )
@@ -982,10 +1026,14 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
             .join(", ")
 
         const up = new Query(
-            `ALTER TABLE ${this.escapePath(table)} ADD CONSTRAINT [${uniqueConstraint.name}] UNIQUE (${columnNames})`,
+            `ALTER TABLE ${this.escapePath(table)} ADD CONSTRAINT [${
+                uniqueConstraint.name
+            }] UNIQUE (${columnNames})`,
         )
         const down = new Query(
-            `ALTER TABLE ${this.escapePath(table)} DROP CONSTRAINT [${uniqueConstraint.name}]`,
+            `ALTER TABLE ${this.escapePath(table)} DROP CONSTRAINT [${
+                uniqueConstraint.name
+            }]`,
         )
         await this.executeQueries(up, down)
 
@@ -1018,10 +1066,16 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
             )
 
         const up = new Query(
-            `ALTER TABLE ${this.escapePath(table)} DROP CONSTRAINT [${uniqueConstraint.name}]`,
+            `ALTER TABLE ${this.escapePath(table)} DROP CONSTRAINT [${
+                uniqueConstraint.name
+            }]`,
         )
         const down = new Query(
-            `ALTER TABLE ${this.escapePath(table)} ADD CONSTRAINT [${uniqueConstraint.name}] UNIQUE (${uniqueConstraint.columnNames.map((c) => `[${c}]`).join(", ")})`,
+            `ALTER TABLE ${this.escapePath(table)} ADD CONSTRAINT [${
+                uniqueConstraint.name
+            }] UNIQUE (${uniqueConstraint.columnNames
+                .map((c) => `[${c}]`)
+                .join(", ")})`,
         )
         await this.executeQueries(up, down)
 
@@ -1143,7 +1197,7 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
             ? tableOrName
             : await this.getCachedTable(tableOrName)
 
-        foreignKey.name ??= this.dataSource.namingStrategy.foreignKeyName(
+        foreignKey.name ??= this.connection.namingStrategy.foreignKeyName(
             table,
             foreignKey.columnNames,
             this.getTablePath(foreignKey),
@@ -1195,8 +1249,7 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
         tableOrName: Table | string,
         foreignKeys: TableForeignKey[],
     ): Promise<void> {
-        for (const fk of foreignKeys)
-            await this.dropForeignKey(tableOrName, fk)
+        for (const fk of foreignKeys) await this.dropForeignKey(tableOrName, fk)
     }
 
     // -------------------------------------------------------------------------
@@ -1211,7 +1264,7 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
             ? tableOrName
             : await this.getCachedTable(tableOrName)
 
-        index.name ??= this.dataSource.namingStrategy.indexName(
+        index.name ??= this.connection.namingStrategy.indexName(
             table,
             index.columnNames,
             index.where,
@@ -1230,8 +1283,7 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
         tableOrName: Table | string,
         indices: TableIndex[],
     ): Promise<void> {
-        for (const index of indices)
-            await this.createIndex(tableOrName, index)
+        for (const index of indices) await this.createIndex(tableOrName, index)
     }
 
     async dropIndex(
@@ -1269,10 +1321,7 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
     // View DDL
     // -------------------------------------------------------------------------
 
-    async createView(
-        view: View,
-        syncWithMetadata = false,
-    ): Promise<void> {
+    async createView(view: View, syncWithMetadata = false): Promise<void> {
         const upQueries: Query[] = []
         const downQueries: Query[] = []
 
@@ -1286,7 +1335,10 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
         await this.executeQueries(upQueries, downQueries)
     }
 
-    async dropView(viewOrName: View | string, ifExists?: boolean): Promise<void> {
+    async dropView(
+        viewOrName: View | string,
+        ifExists?: boolean,
+    ): Promise<void> {
         const viewName = InstanceChecker.isView(viewOrName)
             ? viewOrName.name
             : viewOrName
@@ -1353,7 +1405,9 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
         const currentDatabase = await this.getCurrentDatabase()
 
         const sql =
-            `SELECT "t".* FROM ${this.escapePath(this.getTypeormMetadataTableName())} "t" ` +
+            `SELECT "t".* FROM ${this.escapePath(
+                this.getTypeormMetadataTableName(),
+            )} "t" ` +
             `WHERE "t"."type" = '${MetadataTableType.VIEW}'` +
             (condition ? ` AND (${condition})` : "")
 
@@ -1384,7 +1438,11 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
         // ------------------------------------------------------------------
         // 1. Resolve table list
         // ------------------------------------------------------------------
-        let dbTables: { TABLE_NAME: string; TABLE_CATALOG: string; IDENTITY_COL_ID: number }[]
+        let dbTables: {
+            TABLE_NAME: string
+            TABLE_CATALOG: string
+            IDENTITY_COL_ID: number
+        }[]
 
         if (!tableNames) {
             dbTables = await this.query(
@@ -1504,7 +1562,10 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
                 `FROM sysforeignkeys fk ` +
                 `INNER JOIN sysobjects o1 ON o1.id = fk.tableid ` +
                 `INNER JOIN sysobjects o2 ON o2.id = fk.reftabid ` +
-                `WHERE o1.type = 'U' AND (${tableNamesCondition.replaceAll('o.', "o1.")}) ` +
+                `WHERE o1.type = 'U' AND (${tableNamesCondition.replaceAll(
+                    "o.",
+                    "o1.",
+                )}) ` +
                 `ORDER BY fk.constrid`,
         )
 
@@ -1626,8 +1687,7 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
                             Number(idx["IS_UNIQUE"]) === 1 &&
                             !dbIndices.some(
                                 (other) =>
-                                    other["INDEX_NAME"] ===
-                                        idx["INDEX_NAME"] &&
+                                    other["INDEX_NAME"] === idx["INDEX_NAME"] &&
                                     other["COLUMN_NAME"] !==
                                         dbColumn["COLUMN_NAME"],
                             ),
@@ -1640,10 +1700,7 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
             // ----- Primary key constraint -----
             const pkColumns = dbPrimaryKeys
                 .filter((pk) => pk["TABLE_NAME"] === dbTable.TABLE_NAME)
-                .sort(
-                    (a, b) =>
-                        Number(a["KEY_ORDER"]) - Number(b["KEY_ORDER"]),
-                )
+                .sort((a, b) => Number(a["KEY_ORDER"]) - Number(b["KEY_ORDER"]))
             if (pkColumns.length > 0) {
                 table.columns.forEach((col) => {
                     if (
@@ -1746,7 +1803,7 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
         const expression =
             typeof view.expression === "string"
                 ? view.expression
-                : view.expression(this.dataSource).getQuery()
+                : view.expression(this.connection).getQuery()
         return new Query(
             `CREATE VIEW ${this.escapePath(view)} AS ${expression}`,
         )
@@ -1761,7 +1818,7 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
         const expression =
             typeof view.expression === "string"
                 ? view.expression.trim()
-                : view.expression(this.dataSource).getQuery()
+                : view.expression(this.connection).getQuery()
         return this.insertTypeormMetadataSql({
             database: view.database,
             type: MetadataTableType.VIEW,
@@ -1802,10 +1859,7 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
      * @param table
      * @param createForeignKeys
      */
-    protected createTableSql(
-        table: Table,
-        createForeignKeys?: boolean,
-    ): Query {
+    protected createTableSql(table: Table, createForeignKeys?: boolean): Query {
         const columnDefinitions = table.columns
             .map((col) => this.buildCreateColumnSql(table, col))
             .join(", ")
@@ -1817,11 +1871,13 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
                 .map((u) => {
                     const name =
                         u.name ??
-                        this.dataSource.namingStrategy.uniqueConstraintName(
+                        this.connection.namingStrategy.uniqueConstraintName(
                             table,
                             u.columnNames,
                         )
-                    return `CONSTRAINT [${name}] UNIQUE (${u.columnNames.map((c) => `[${c}]`).join(", ")})`
+                    return `CONSTRAINT [${name}] UNIQUE (${u.columnNames
+                        .map((c) => `[${c}]`)
+                        .join(", ")})`
                 })
                 .join(", ")
             sql += `, ${uniquesSql}`
@@ -1833,7 +1889,7 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
                 .map((c) => {
                     const name =
                         c.name ??
-                        this.dataSource.namingStrategy.checkConstraintName(
+                        this.connection.namingStrategy.checkConstraintName(
                             table,
                             c.expression!,
                         )
@@ -1847,10 +1903,8 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
         if (createForeignKeys && table.foreignKeys.length > 0) {
             const fksSql = table.foreignKeys
                 .map((fk) => {
-                    const cols = fk.columnNames
-                        .map((c) => `[${c}]`)
-                        .join(", ")
-                    fk.name ??= this.dataSource.namingStrategy.foreignKeyName(
+                    const cols = fk.columnNames.map((c) => `[${c}]`).join(", ")
+                    fk.name ??= this.connection.namingStrategy.foreignKeyName(
                         table,
                         fk.columnNames,
                         this.getTablePath(fk),
@@ -1861,7 +1915,9 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
                         .join(", ")
                     let constraint =
                         `CONSTRAINT [${fk.name}] FOREIGN KEY (${cols}) ` +
-                        `REFERENCES ${this.escapePath(this.getTablePath(fk))} (${refCols})`
+                        `REFERENCES ${this.escapePath(
+                            this.getTablePath(fk),
+                        )} (${refCols})`
                     if (fk.onDelete) constraint += ` ON DELETE ${fk.onDelete}`
                     if (fk.onUpdate) constraint += ` ON UPDATE ${fk.onUpdate}`
                     return constraint
@@ -1875,7 +1931,7 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
         if (primaryColumns.length > 0) {
             const pkName =
                 primaryColumns[0].primaryKeyConstraintName ??
-                this.dataSource.namingStrategy.primaryKeyName(
+                this.connection.namingStrategy.primaryKeyName(
                     table,
                     primaryColumns.map((c) => c.name),
                 )
@@ -1892,8 +1948,9 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
         ifExists?: boolean,
     ): Query {
         const sql = ifExists
-            ? `IF OBJECT_ID('${this.driver.parseTableName(tableOrName).tableName}') IS NOT NULL ` +
-              `DROP TABLE ${this.escapePath(tableOrName)}`
+            ? `IF OBJECT_ID('${
+                  this.driver.parseTableName(tableOrName).tableName
+              }') IS NOT NULL ` + `DROP TABLE ${this.escapePath(tableOrName)}`
             : `DROP TABLE ${this.escapePath(tableOrName)}`
         return new Query(sql)
     }
@@ -1902,7 +1959,9 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
         const cols = index.columnNames.map((c) => `[${c}]`).join(", ")
         const unique = index.isUnique ? "UNIQUE " : ""
         return new Query(
-            `CREATE ${unique}INDEX [${index.name}] ON ${this.escapePath(table)} (${cols})`,
+            `CREATE ${unique}INDEX [${index.name}] ON ${this.escapePath(
+                table,
+            )} (${cols})`,
         )
     }
 
@@ -1927,8 +1986,12 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
             .map((c) => `[${c}]`)
             .join(", ")
         let sql =
-            `ALTER TABLE ${this.escapePath(table)} ADD CONSTRAINT [${foreignKey.name}] ` +
-            `FOREIGN KEY (${cols}) REFERENCES ${this.escapePath(this.getTablePath(foreignKey))} (${refCols})`
+            `ALTER TABLE ${this.escapePath(table)} ADD CONSTRAINT [${
+                foreignKey.name
+            }] ` +
+            `FOREIGN KEY (${cols}) REFERENCES ${this.escapePath(
+                this.getTablePath(foreignKey),
+            )} (${refCols})`
         if (foreignKey.onDelete) sql += ` ON DELETE ${foreignKey.onDelete}`
         if (foreignKey.onUpdate) sql += ` ON UPDATE ${foreignKey.onUpdate}`
         return new Query(sql)
@@ -1946,12 +2009,11 @@ export class SybaseQueryRunner extends BaseQueryRunner implements QueryRunner {
         )
     }
 
-    protected createCheckConstraintSql(
-        table: Table,
-        check: TableCheck,
-    ): Query {
+    protected createCheckConstraintSql(table: Table, check: TableCheck): Query {
         return new Query(
-            `ALTER TABLE ${this.escapePath(table)} ADD CONSTRAINT [${check.name}] CHECK (${check.expression})`,
+            `ALTER TABLE ${this.escapePath(table)} ADD CONSTRAINT [${
+                check.name
+            }] CHECK (${check.expression})`,
         )
     }
 
